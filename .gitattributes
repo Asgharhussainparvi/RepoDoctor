@@ -1,0 +1,4 @@
+# Force LF everywhere. Patches and the Linux sandbox break on CRLF.
+* text=auto eol=lf
+*.diff text eol=lf
+*.patch text eol=lf
