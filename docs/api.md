@@ -53,3 +53,9 @@ and unknown `/api/...` paths return the JSON error envelope. Without a build, `/
 Work for one session runs strictly in order on a background thread: an approval that arrives while the worker that produced the
 patch is still returning is queued behind it, never refused. Different sessions run in parallel (up to
 `REPODOCTOR_MAX_ACTIVE_SESSIONS`).
+
+## Event kinds
+
+Each `step` event has a `kind`: `state` (a normal step), `info` (a neutral note, for example "Debugging session created."),
+`warning` (something went wrong but the run continues, for example a patch that could not be applied or a failed verification
+that triggers a retry) and `error` (the run failed). The UI shows `warning` with a "!" and everything else without one.

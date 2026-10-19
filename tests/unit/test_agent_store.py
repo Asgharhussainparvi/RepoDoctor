@@ -20,11 +20,7 @@ def sid(store):
 
 def test_create_and_get(store, sid):
     row = store.get_session(sid)
-    assert (
-        row.state is State.INITIALIZE
-        and row.repo_path == "/repo"
-        and row.patch_attempts == 0
-    )
+    assert row.state is State.INITIALIZE and row.repo_path == "/repo" and row.patch_attempts == 0
     with pytest.raises(KeyError):
         store.get_session("nope")
 
@@ -41,10 +37,7 @@ def test_steps_are_ordered_and_typed(store, sid):
     store.add_step(sid, State.INITIALIZE, "info", "one")
     store.add_step(sid, State.RUN_TESTS, "state", "two")
     steps = store.steps(sid)
-    assert [(s.seq < steps[-1].seq or s is steps[-1], s.message) for s in steps] == [
-        (True, "one"),
-        (True, "two"),
-    ]
+    assert [(s.seq < steps[-1].seq or s is steps[-1], s.message) for s in steps] == [(True, "one"), (True, "two")]
     assert steps[1].state is State.RUN_TESTS
 
 
@@ -55,27 +48,15 @@ def test_counters_feedback_and_json_fields(store, sid):
     store.append_feedback(sid, AttemptFeedback(attempt=1, reason_code="x", message="y"))
     store.save_reproduction(sid, "{}")
     row = store.get_session(sid)
-    assert (
-        row.patch_attempts == 2
-        and row.active_seconds == 2.5
-        and row.reproduction_json == "{}"
-    )
+    assert row.patch_attempts == 2 and row.active_seconds == 2.5 and row.reproduction_json == "{}"
     assert [(f.attempt, f.reason_code) for f in row.feedback] == [(1, "x")]
 
 
 def test_tool_calls_round_trip(store, sid):
-    store.add_tool_calls(
-        sid,
-        [
-            ToolCallRecord("read_file", True, None, 0.1, True),
-            ToolCallRecord("run_tests", False, "timeout", 2.0, False),
-        ],
-    )
+    store.add_tool_calls(sid, [ToolCallRecord("read_file", True, None, 0.1, True),
+                               ToolCallRecord("run_tests", False, "timeout", 2.0, False)])
     calls = store.tool_calls(sid)
-    assert [(c["tool"], c["ok"], c["budgeted"]) for c in calls] == [
-        ("read_file", 1, 1),
-        ("run_tests", 0, 0),
-    ]
+    assert [(c["tool"], c["ok"], c["budgeted"]) for c in calls] == [("read_file", 1, 1), ("run_tests", 0, 0)]
 
 
 def add_patch(store, sid, sha=SHA):
@@ -90,24 +71,17 @@ def test_patch_lifecycle_and_uniqueness(store, sid):
     store.set_patch_status(sid, SHA, expected="proposed", new="applied")
     with pytest.raises(StaleStateError):
         store.set_patch_status(sid, SHA, expected="proposed", new="applied")
-    assert (
-        store.latest_patch(sid, "applied").files == ["a.py"]
-        and store.latest_patch(sid, "proposed") is None
-    )
+    assert store.latest_patch(sid, "applied").files == ["a.py"] and store.latest_patch(sid, "proposed") is None
 
 
 def test_approve_requires_waiting_state_and_pending_patch(store, sid):
     add_patch(store, sid)
     with pytest.raises(StaleStateError):  # session is still INITIALIZE
         store.approve_patch(sid, SHA)
-    store.set_state(
-        sid, expected=State.INITIALIZE, new=State.WAITING_APPROVAL
-    )  # (test shortcut)
+    store.set_state(sid, expected=State.INITIALIZE, new=State.WAITING_APPROVAL)  # (test shortcut)
     with pytest.raises(KeyError):
         store.approve_patch(sid, "d" * 64)
-    assert (
-        store.get_session(sid).state is State.WAITING_APPROVAL
-    )  # failed approval rolled everything back
+    assert store.get_session(sid).state is State.WAITING_APPROVAL  # failed approval rolled everything back
     store.approve_patch(sid, SHA)
     assert store.get_session(sid).state is State.APPLY_PATCH
     assert store.get_patch(sid, SHA).status == "approved"
@@ -119,10 +93,7 @@ def test_reject_marks_patch_and_state(store, sid):
     add_patch(store, sid)
     store.set_state(sid, expected=State.INITIALIZE, new=State.WAITING_APPROVAL)
     store.reject_patch(sid, SHA)
-    assert (
-        store.get_session(sid).state is State.REJECTED
-        and store.get_patch(sid, SHA).status == "rejected"
-    )
+    assert store.get_session(sid).state is State.REJECTED and store.get_patch(sid, SHA).status == "rejected"
 
 
 def test_data_survives_reopening_a_file_database(tmp_path):
@@ -130,9 +101,7 @@ def test_data_survives_reopening_a_file_database(tmp_path):
     first = SessionStore(path)
     sid = first.create_session("/repo")
     add_patch(first, sid)
-    first.set_state(
-        sid, expected=State.INITIALIZE, new=State.WAITING_APPROVAL, message="waiting"
-    )
+    first.set_state(sid, expected=State.INITIALIZE, new=State.WAITING_APPROVAL, message="waiting")
     first.close()
     second = SessionStore(path)
     assert second.get_session(sid).state is State.WAITING_APPROVAL
@@ -142,15 +111,9 @@ def test_data_survives_reopening_a_file_database(tmp_path):
 def test_waiting_older_than_includes_the_exact_boundary(store, sid):
     """A coarse clock (Windows ~16 ms) can give a session the same timestamp as the cutoff; that counts as old."""
     store.set_state(sid, expected=State.INITIALIZE, new=State.WAITING_APPROVAL)
-    stamp = store._one("SELECT updated_at FROM debug_sessions WHERE id=?", (sid,))[
-        "updated_at"
-    ]
+    stamp = store._one("SELECT updated_at FROM debug_sessions WHERE id=?", (sid,))["updated_at"]
     assert store.waiting_older_than(stamp) == [sid]  # equal timestamp: expired
-    assert (
-        store.waiting_older_than("0000-01-01T00:00:00+00:00") == []
-    )  # cutoff in the past: not old enough
+    assert store.waiting_older_than("0000-01-01T00:00:00+00:00") == []  # cutoff in the past: not old enough
     assert store.waiting_older_than("9999-01-01T00:00:00+00:00") == [sid]
     store.set_state(sid, expected=State.WAITING_APPROVAL, new=State.CANCELLED)
-    assert (
-        store.waiting_older_than("9999-01-01T00:00:00+00:00") == []
-    )  # only WAITING_APPROVAL sessions
+    assert store.waiting_older_than("9999-01-01T00:00:00+00:00") == []  # only WAITING_APPROVAL sessions

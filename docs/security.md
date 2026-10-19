@@ -80,11 +80,55 @@ Approvals are single-use and bound to the patch contents: approving patch A neve
 ## The HTTP API
 
 - Binds to 127.0.0.1 and has no accounts. Anything that can reach the port can use it, so never expose it.
-- Rejects unknown `Host` headers (DNS rebinding) and cross-site POSTs (an `Origin` that is not in
-  `REPODOCTOR_CORS_ORIGINS`). Command-line clients send no Origin and are unaffected.
+- Rejects unknown `Host` headers (DNS rebinding) and cross-site POSTs: an `Origin` must equal the `Host` the request was
+  addressed to (the UI this server serves) or be listed in `REPODOCTOR_CORS_ORIGINS`. Command-line clients send no Origin and are unaffected.
 - A client can never send a command or a host path: it uploads a zip or picks the bundled sample.
 - Uploads: size-limited while reading; extraction rejects `..`, absolute and drive paths, never extracts symlinks,
   skips `.git` and cache directories, caps file count and unpacked size (also while streaming), and maps corrupt
   archives to a clear 400. A failed upload leaves no files behind.
 - Approval is checked in the backend before any work is scheduled; the UI button is cosmetic.
 - Error responses never include stack traces or internal paths.
+
+## Phase 9: threat matrix and test evidence
+
+Run the container-level evidence with `python -m pytest -m docker tests/security -v` (hostile code runs only inside the
+sandbox; every test is bounded by the limits below). The rest runs without Docker.
+
+| Threat | Control | Evidence |
+|---|---|---|
+| Infinite loop or hang | in-container `timeout` plus a host-side backstop; session time limit | `TestHostileRepositories` (loop), `TestHostileSessions` |
+| Memory bomb | 512 MB cgroup limit, swap off | `test_a_memory_bomb_is_killed_and_the_sandbox_survives` and the repo-level and session-level variants |
+| Fork bomb | `--pids-limit 256` | `test_a_fork_storm_is_stopped_by_the_process_limit` (also from inside a test) |
+| Disk fill | size-capped tmpfs (256 MB workspace, 64 MB /tmp) | `test_filling_the_disk_is_capped_by_the_tmpfs_size` |
+| Output flood | first-half plus last-half cap (the summary line survives) | `test_output_floods_are_capped_and_keep_the_tail` |
+| CPU hogging | `--cpus 1` | `test_cpu_is_limited_to_one_cpu` |
+| Network exfiltration (TCP, DNS, cloud metadata) | `--network none`, only `lo` exists | `test_network_is_unreachable_including_dns_and_cloud_metadata` |
+| Privilege escalation | non-root (uid 10001), all capabilities dropped, `no-new-privileges`, Docker's default seccomp | `test_no_capabilities_no_new_privileges_default_seccomp_and_not_root` reads `/proc/self/status` from inside |
+| Reaching the host (files, Docker socket) | no bind mounts, no host share file systems | `test_the_host_filesystem_and_docker_socket_are_not_reachable` parses `/proc/self/mounts` |
+| Stealing host secrets | environment is never passed | `test_host_environment_variables_never_enter_the_container` (sentinel in the host environment) |
+| Writing outside the workspace | read-only root file system | `test_only_workspace_and_tmp_are_writable` |
+| Symlink tricks | `realpath` check on every read; symlinks never uploaded; git refuses to patch through symlinks | `test_symlinks_created_at_runtime...`, `test_a_symlink_to_a_secret_outside_the_repository...` |
+| Shell injection through tool arguments | no shell anywhere: argv lists only | canary-file tests in `test_tool_abuse.py` |
+| Malicious patches | patch policy (36 cases in `test_compromised_model.py`): tests/config, `.git`, traversal, creation, deletion, renames, modes, binary, size, prose, lookalike names | each case is refused, never offered, and leaves the workspace byte-for-byte unchanged |
+| Parser differential (validator vs `git apply`) | a `diff --git` header must agree with the `---`/`+++` lines | `test_patch_policy.py` (probed against real git first) |
+| Editing tests to fake a fix | protected paths, including `pytest.toml`, `sitecustomize.py`, `*.pth`, `testing/` | `test_patch_policy.py` |
+| Prompt injection from the repository | model output is data; read-only tools; the engine never sees apply/approve/reset; human approval of the exact hash | `test_compromised_model.py` (hostile hypotheses and patches) |
+| Well-formed but malicious code in a patch | the human reads the full diff; if approved it only runs inside the sandbox | `test_a_well_formed_but_malicious_patch_is_visible...` and `test_an_approved_malicious_patch_only_ever_runs_inside_the_sandbox` |
+| HTML or script injection into the UI | React renders text; no raw-HTML APIs | `frontend/src/security.test.tsx` including source guard rails |
+| Zip attacks (slip, bomb, symlink, odd names, corrupt entries) | defensive extraction, Windows-invalid names rejected | `test_zip_upload.py` |
+| Cross-site requests, DNS rebinding | Origin and Host checks | `test_api.py` |
+| Forged test output | exit code must agree with the parsed summary, else `unparseable` | `test_forged_results.py` |
+
+## Residual risks (honest)
+
+- **Shared kernel.** Docker is not a VM. A kernel or runtime vulnerability could allow an escape. Use gVisor, Firecracker or a
+  dedicated VM for anything beyond a hackathon.
+- **A repository can lie about its own test results** if it forges both the summary line and the exit code
+  (`test_KNOWN_LIMITATION_...` pins this). The sandbox protects the host, not the honesty of the tests.
+- **Detached processes survive a timeout** until the sandbox is destroyed (characterised by a test). They only affect that session.
+- **Policy cannot judge intent.** A patch that special-cases the tests by editing source code passes the policy. The human diff
+  review is the control; the UI says so.
+- **Test files are protected by name and folder**, not by what pytest actually collects. A repository that keeps tests in an unusual
+  place is only partly protected.
+- **Model calls leave your machine.** File contents and test output go to Amazon Bedrock.
+- **The local API has no authentication.** It relies on binding to 127.0.0.1 plus Origin and Host checks. Never expose it.

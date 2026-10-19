@@ -9,11 +9,11 @@ export function buildTimeline(events: AgentEvent[], session: Session | null): Ti
   const seen = new Set<number>();
   const rows: TimelineRow[] = [];
   for (const e of events) {
-    if (seen.has(e.seq) || !["state", "info", "error"].includes(e.kind)) continue;
+    if (seen.has(e.seq) || !["state", "info", "warning", "error"].includes(e.kind)) continue;
     seen.add(e.seq);
     rows.push({
       id: e.seq, message: e.message, state: e.state,
-      status: e.kind === "error" ? "failed" : e.kind === "info" ? "warn" : "done",
+      status: e.kind === "error" ? "failed" : e.kind === "warning" ? "warn" : "done",
     });
   }
   rows.sort((a, b) => a.id - b.id);

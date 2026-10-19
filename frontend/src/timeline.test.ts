@@ -12,8 +12,13 @@ describe("buildTimeline", () => {
   });
 
   it("shows warnings and errors with their own status", () => {
-    const rows = buildTimeline([ev(1, "info", "Proposed patch could not be safely applied."), ev(2, "error", "boom")], finished("FAILED", "failed"));
+    const rows = buildTimeline([ev(1, "warning", "Proposed patch could not be safely applied."), ev(2, "error", "boom")], finished("FAILED", "failed"));
     expect(rows.map((r) => r.status)).toEqual(["warn", "failed"]);
+  });
+
+  it("shows a neutral info note as a normal completed step, not a warning", () => {
+    const rows = buildTimeline([ev(1, "info", "Debugging session created."), ev(2, "state", "Repository copied.")], finished("SUCCESS", "success", {}, true));
+    expect(rows.map((r) => r.status)).toEqual(["done", "done"]);
   });
 
   it("does not pulse once the session is finished", () => {

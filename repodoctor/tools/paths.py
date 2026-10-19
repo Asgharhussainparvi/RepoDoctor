@@ -1,5 +1,4 @@
 """Repository path validation and the protected-path policy. Pure functions."""
-
 from __future__ import annotations
 
 import fnmatch
@@ -9,19 +8,16 @@ MAX_PATH_LENGTH = 300
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-PROTECTED_DIR_NAMES = frozenset({"tests", "test", "__tests__"})
+PROTECTED_DIR_NAMES = frozenset({"tests", "test", "__tests__", "testing"})
 PROTECTED_FILE_NAMES = frozenset(
     {
-        "conftest.py",
-        "pytest.ini",
-        "tox.ini",
-        "setup.cfg",
-        "pyproject.toml",
-        "noxfile.py",
-        ".coveragerc",
+        "conftest.py", "pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml", "tox.ini", "setup.cfg",
+        "pyproject.toml", "noxfile.py", ".coveragerc",
+        # run automatically when Python starts, so editing them can change what every test sees
+        "sitecustomize.py", "usercustomize.py",
     }
 )
-PROTECTED_FILE_GLOBS = ("test_*.py", "*_test.py")
+PROTECTED_FILE_GLOBS = ("test_*.py", "*_test.py", "*.pth")
 
 
 class InvalidPathError(ValueError):

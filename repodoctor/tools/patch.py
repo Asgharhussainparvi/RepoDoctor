@@ -4,7 +4,6 @@ Policy (MVP): a patch may only MODIFY existing files, must use a/ and b/ prefixe
 may not touch tests or test configuration, and must stay small. Anything else is
 rejected before it gets anywhere near `git apply`.
 """
-
 from __future__ import annotations
 
 import hashlib
@@ -15,37 +14,14 @@ from .limits import ToolLimits
 from .paths import InvalidPathError, is_protected_path, validate_repo_path
 
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+_GIT_HEADER_RE = re.compile(r"^diff --git a/(?P<old>\S+) b/(?P<new>\S+)$")
 _HEADER_REJECTS = (
-    (
-        re.compile(r"^(rename|copy) (from|to) "),
-        "rename_not_allowed",
-        "Renames and copies are not allowed.",
-    ),
-    (
-        re.compile(r"^similarity index "),
-        "rename_not_allowed",
-        "Renames and copies are not allowed.",
-    ),
-    (
-        re.compile(r"^(old|new) mode "),
-        "mode_change_not_allowed",
-        "File mode changes are not allowed.",
-    ),
-    (
-        re.compile(r"^new file mode "),
-        "file_creation_not_allowed",
-        "Creating files is not allowed.",
-    ),
-    (
-        re.compile(r"^deleted file mode "),
-        "file_deletion_not_allowed",
-        "Deleting files is not allowed.",
-    ),
-    (
-        re.compile(r"^(GIT binary patch|Binary files )"),
-        "binary_patch_not_allowed",
-        "Binary patches are not allowed.",
-    ),
+    (re.compile(r"^(rename|copy) (from|to) "), "rename_not_allowed", "Renames and copies are not allowed."),
+    (re.compile(r"^similarity index "), "rename_not_allowed", "Renames and copies are not allowed."),
+    (re.compile(r"^(old|new) mode "), "mode_change_not_allowed", "File mode changes are not allowed."),
+    (re.compile(r"^new file mode "), "file_creation_not_allowed", "Creating files is not allowed."),
+    (re.compile(r"^deleted file mode "), "file_deletion_not_allowed", "Deleting files is not allowed."),
+    (re.compile(r"^(GIT binary patch|Binary files )"), "binary_patch_not_allowed", "Binary patches are not allowed."),
 )
 
 
@@ -84,24 +60,19 @@ def _header_path(token: str, prefix: str, *, old_side: bool, limits: ToolLimits)
     token = token.split("\t")[0].rstrip("\r")
     if token == "/dev/null":
         if old_side:
-            raise PatchRejected(
-                "file_creation_not_allowed", "Creating files is not allowed."
-            )
-        raise PatchRejected(
-            "file_deletion_not_allowed", "Deleting files is not allowed."
-        )
+            raise PatchRejected("file_creation_not_allowed", "Creating files is not allowed.")
+        raise PatchRejected("file_deletion_not_allowed", "Deleting files is not allowed.")
     if token.startswith('"'):
         raise PatchRejected("invalid_path", "Quoted paths are not supported.")
     if not token.startswith(prefix):
         raise PatchRejected("invalid_path", f"Patch paths must start with '{prefix}'.")
     try:
-        path = validate_repo_path(token[len(prefix) :])
+        path = validate_repo_path(token[len(prefix):])
     except InvalidPathError as exc:
         raise PatchRejected("invalid_path", f"Unsafe path in patch: {exc}") from exc
     if not limits.allow_test_edits and is_protected_path(path):
         raise PatchRejected(
-            "protected_path",
-            f"Editing test or test-configuration file '{path}' is not allowed.",
+            "protected_path", f"Editing test or test-configuration file '{path}' is not allowed."
         )
     return path
 
@@ -111,9 +82,7 @@ def validate_patch(diff: str, limits: ToolLimits | None = None) -> ValidatedPatc
     if not isinstance(diff, str) or not diff.strip():
         raise PatchRejected("empty_patch", "The patch is empty.")
     if len(diff.encode("utf-8")) > limits.max_patch_bytes:
-        raise PatchRejected(
-            "patch_too_large", f"The patch exceeds {limits.max_patch_bytes} bytes."
-        )
+        raise PatchRejected("patch_too_large", f"The patch exceeds {limits.max_patch_bytes} bytes.")
     if "\x00" in diff:
         raise PatchRejected("malformed_patch", "The patch contains NUL bytes.")
 
@@ -122,6 +91,7 @@ def validate_patch(diff: str, limits: ToolLimits | None = None) -> ValidatedPatc
     n = len(lines)
     files: list[str] = []
     current: str | None = None
+    git_header_path: str | None = None
     in_hunk = False
     insertions = deletions = 0
     i = 0
@@ -129,18 +99,24 @@ def validate_patch(diff: str, limits: ToolLimits | None = None) -> ValidatedPatc
         line = lines[i]
         if line.startswith("diff --git "):
             in_hunk, current = False, None
+            header = _GIT_HEADER_RE.match(line.rstrip("\r"))
+            if header is None:
+                raise PatchRejected("malformed_patch", "The 'diff --git' header is malformed or uses an unsupported form.")
+            if header["old"] != header["new"]:
+                # Two different names is what a rename or copy looks like. Git could in principle prefer these
+                # names over the ---/+++ lines, so refuse any ambiguity.
+                raise PatchRejected("rename_not_allowed", "Renames and copies are not allowed.")
+            git_header_path = header["old"]
             i += 1
             continue
-        if (
-            line.startswith("--- ")
-            and i + 2 < n
-            and lines[i + 1].startswith("+++ ")
-            and lines[i + 2].startswith("@@")
-        ):
+        if line.startswith("--- ") and i + 2 < n and lines[i + 1].startswith("+++ ") and lines[i + 2].startswith("@@"):
             old = _header_path(line[4:], "a/", old_side=True, limits=limits)
             new = _header_path(lines[i + 1][4:], "b/", old_side=False, limits=limits)
             if old != new:
                 raise PatchRejected("rename_not_allowed", "Renames are not allowed.")
+            if git_header_path is not None and git_header_path != old:
+                raise PatchRejected("malformed_patch", "The 'diff --git' header and the ---/+++ lines name different files.")
+            git_header_path = None
             current = old
             if old not in files:
                 files.append(old)
@@ -160,9 +136,7 @@ def validate_patch(diff: str, limits: ToolLimits | None = None) -> ValidatedPatc
             elif first == "-":
                 deletions += 1
             elif first not in (" ", "\\") and line != "":
-                raise PatchRejected(
-                    "malformed_patch", f"Unexpected line inside a hunk: {line[:60]!r}"
-                )
+                raise PatchRejected("malformed_patch", f"Unexpected line inside a hunk: {line[:60]!r}")
             i += 1
             continue
         for regex, code, message in _HEADER_REJECTS:
@@ -171,23 +145,14 @@ def validate_patch(diff: str, limits: ToolLimits | None = None) -> ValidatedPatc
         if line.startswith("index "):
             i += 1
             continue
-        raise PatchRejected(
-            "malformed_patch", f"Unexpected line outside a hunk: {line[:60]!r}"
-        )
+        raise PatchRejected("malformed_patch", f"Unexpected line outside a hunk: {line[:60]!r}")
 
     if not files:
-        raise PatchRejected(
-            "malformed_patch",
-            "No file changes found. Use a unified diff with a/ and b/ paths.",
-        )
+        raise PatchRejected("malformed_patch", "No file changes found. Use a unified diff with a/ and b/ paths.")
     if len(files) > limits.max_patch_files:
-        raise PatchRejected(
-            "too_many_files",
-            f"The patch touches more than {limits.max_patch_files} files.",
-        )
+        raise PatchRejected("too_many_files", f"The patch touches more than {limits.max_patch_files} files.")
     if insertions + deletions > limits.max_patch_changed_lines:
         raise PatchRejected(
-            "patch_too_large",
-            f"The patch changes more than {limits.max_patch_changed_lines} lines.",
+            "patch_too_large", f"The patch changes more than {limits.max_patch_changed_lines} lines."
         )
     return ValidatedPatch(text, patch_sha256(text), tuple(files), insertions, deletions)
