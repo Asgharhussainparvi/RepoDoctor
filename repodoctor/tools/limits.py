@@ -1,4 +1,5 @@
 """Limits applied to every tool. One place to tune them."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ class ToolLimits:
     max_read_lines: int = 400
     max_line_chars: int = 2000
     max_file_bytes: int = 1_000_000
+    max_edit_file_lines: int = 3000  # whole-file reads used to build edit patches
     max_search_results: int = 50
     max_search_line_chars: int = 300
     max_patch_bytes: int = 100_000

@@ -1,0 +1,3 @@
+# Only needed for real Bedrock calls (Phase 5). The rest of RepoDoctor runs without these.
+boto3>=1.40
+strands-agents>=1.53,<2

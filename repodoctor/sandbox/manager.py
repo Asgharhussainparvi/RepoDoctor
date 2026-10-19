@@ -4,6 +4,7 @@ Everything untrusted (repository code, tests, git on a repository) runs inside a
 locked-down Docker container that this module creates and destroys. Nothing here
 uses a shell: every command is an argv list.
 """
+
 from __future__ import annotations
 
 import io
@@ -21,7 +22,6 @@ from typing import Sequence
 
 from .config import SandboxConfig
 from .errors import (
-    DOCKER_UNAVAILABLE_MESSAGE,
     DockerUnavailableError,
     SandboxError,
     SandboxImageMissingError,
@@ -38,7 +38,16 @@ KILL_GRACE_SECONDS = 2
 BACKSTOP_SECONDS = 15
 TRUNCATION_MARKER = b"\n...[output truncated]...\n"
 EXCLUDED_NAMES = frozenset(
-    {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "venv", "node_modules"}
+    {
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".venv",
+        "venv",
+        "node_modules",
+    }
 )
 MAX_ARGV_ITEMS = 64
 MAX_STDIN_BYTES = 1_000_000
@@ -150,7 +159,8 @@ def _docker_call(
             max_bytes=max_bytes or config.max_output_bytes,
         )
     except OSError as exc:
-        raise DockerUnavailableError(f"{DOCKER_UNAVAILABLE_MESSAGE} ({exc})") from exc
+        logger.warning("docker_unavailable detail=%s", exc)
+        raise DockerUnavailableError(detail=str(exc)) from exc
 
 
 def _text(raw: _RawResult) -> str:
@@ -223,10 +233,16 @@ def build_repo_tar(source: Path, config: SandboxConfig) -> tuple[bytes, UploadSu
                 files += 1
                 total += full.stat().st_size
                 if files > config.max_upload_files:
-                    raise UploadRejectedError(f"Repository has more than {config.max_upload_files} files")
+                    raise UploadRejectedError(
+                        f"Repository has more than {config.max_upload_files} files"
+                    )
                 if total > config.max_upload_bytes:
-                    raise UploadRejectedError(f"Repository is larger than {config.max_upload_bytes} bytes")
-                info = tar.gettarinfo(str(full), arcname=full.relative_to(root).as_posix())
+                    raise UploadRejectedError(
+                        f"Repository is larger than {config.max_upload_bytes} bytes"
+                    )
+                info = tar.gettarinfo(
+                    str(full), arcname=full.relative_to(root).as_posix()
+                )
                 info.uid = info.gid = 0
                 info.uname = info.gname = ""
                 info.mode = 0o755 if info.mode & 0o111 else 0o644
@@ -234,7 +250,9 @@ def build_repo_tar(source: Path, config: SandboxConfig) -> tuple[bytes, UploadSu
                     tar.addfile(info, handle)
     if files == 0:
         raise UploadRejectedError("Repository contains no files")
-    return buf.getvalue(), UploadSummary(file_count=files, total_bytes=total, skipped_links=skipped)
+    return buf.getvalue(), UploadSummary(
+        file_count=files, total_bytes=total, skipped_links=skipped
+    )
 
 
 # --------------------------------------------------------------------------
@@ -243,7 +261,9 @@ def build_repo_tar(source: Path, config: SandboxConfig) -> tuple[bytes, UploadSu
 class SandboxManager:
     """One container per debugging session. Use as a context manager."""
 
-    def __init__(self, config: SandboxConfig | None = None, session_id: str | None = None) -> None:
+    def __init__(
+        self, config: SandboxConfig | None = None, session_id: str | None = None
+    ) -> None:
         self.config = config or SandboxConfig()
         sid = uuid.uuid4().hex[:12] if session_id is None else session_id
         if not _SESSION_RE.fullmatch(sid):
@@ -258,9 +278,12 @@ class SandboxManager:
         raw = _docker_call(config, ["info", "--format", "{{.OSType}}"], timeout=20)
         lines = [ln.strip() for ln in _text(raw).splitlines() if ln.strip()]
         if raw.timed_out or raw.returncode != 0 or not lines:
-            raise DockerUnavailableError(f"{DOCKER_UNAVAILABLE_MESSAGE} ({_tail(raw)})")
+            logger.warning("docker_unavailable detail=%s", _tail(raw))
+            raise DockerUnavailableError(detail=_tail(raw))
         if lines[-1] != "linux":
-            raise SandboxError(f"Sandbox needs Linux containers, but Docker reports {lines[-1]!r}.")
+            raise SandboxError(
+                f"Sandbox needs Linux containers, but Docker reports {lines[-1]!r}."
+            )
 
     @staticmethod
     def image_exists(config: SandboxConfig) -> bool:
@@ -273,7 +296,14 @@ class SandboxManager:
         dockerfile = dockerfile or root / "docker" / "sandbox.Dockerfile"
         raw = _docker_call(
             config,
-            ["build", "-t", config.image, "-f", str(dockerfile), str(dockerfile.parent)],
+            [
+                "build",
+                "-t",
+                config.image,
+                "-f",
+                str(dockerfile),
+                str(dockerfile.parent),
+            ],
             timeout=900,
             max_bytes=5_000_000,
         )
@@ -284,10 +314,13 @@ class SandboxManager:
     @staticmethod
     def cleanup_stale(config: SandboxConfig) -> int:
         """Remove every RepoDoctor container (including from crashed sessions)."""
-        raw = _docker_call(config, ["ps", "-aq", "--filter", f"label={MANAGED_LABEL}"], timeout=20)
+        raw = _docker_call(
+            config, ["ps", "-aq", "--filter", f"label={MANAGED_LABEL}"], timeout=20
+        )
         ids = _text(raw).split()
         if raw.returncode != 0:
-            raise DockerUnavailableError(f"{DOCKER_UNAVAILABLE_MESSAGE} ({_tail(raw)})")
+            logger.warning("docker_unavailable detail=%s", _tail(raw))
+            raise DockerUnavailableError(detail=_tail(raw))
         if ids:
             _docker_call(config, ["rm", "-f", "-v", *ids], timeout=60)
         return len(ids)
@@ -296,22 +329,39 @@ class SandboxManager:
     def build_run_args(self) -> list[str]:
         c = self.config
         return [
-            "run", "-d", "--init",
-            "--name", self.container_name,
-            "--label", MANAGED_LABEL,
-            "--label", f"repodoctor.session={self.session_id}",
-            "--network", "none",
-            "--memory", c.memory, "--memory-swap", c.memory,
-            "--cpus", str(c.cpus),
-            "--pids-limit", str(c.pids_limit),
-            "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
+            "run",
+            "-d",
+            "--init",
+            "--name",
+            self.container_name,
+            "--label",
+            MANAGED_LABEL,
+            "--label",
+            f"repodoctor.session={self.session_id}",
+            "--network",
+            "none",
+            "--memory",
+            c.memory,
+            "--memory-swap",
+            c.memory,
+            "--cpus",
+            str(c.cpus),
+            "--pids-limit",
+            str(c.pids_limit),
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
             "--read-only",
-            "--tmpfs", f"/tmp:rw,exec,nosuid,nodev,size={c.tmp_size}",
-            "--tmpfs", f"{WORKSPACE}:rw,exec,nosuid,nodev,mode=1777,size={c.workspace_size}",
-            "-w", WORKSPACE,
+            "--tmpfs",
+            f"/tmp:rw,exec,nosuid,nodev,size={c.tmp_size}",
+            "--tmpfs",
+            f"{WORKSPACE}:rw,exec,nosuid,nodev,mode=1777,size={c.workspace_size}",
+            "-w",
+            WORKSPACE,
             c.image,
-            "sleep", "infinity",
+            "sleep",
+            "infinity",
         ]
 
     @property
@@ -333,13 +383,29 @@ class SandboxManager:
             self._docker(["rm", "-f", "-v", self.container_name], timeout=30)
             raise SandboxError(f"Failed to start sandbox container: {_tail(raw)}")
         self._state = "running"
-        logger.info("sandbox_started session=%s container=%s", self.session_id, self.container_name)
+        logger.info(
+            "sandbox_started session=%s container=%s",
+            self.session_id,
+            self.container_name,
+        )
 
     def upload_repo(self, source: str | Path) -> UploadSummary:
         self._require_running()
         data, summary = build_repo_tar(Path(source), self.config)
         raw = self._docker(
-            ["exec", "-i", "-w", WORKSPACE, self.container_name, "tar", "-x", "-f", "-", "-C", WORKSPACE],
+            [
+                "exec",
+                "-i",
+                "-w",
+                WORKSPACE,
+                self.container_name,
+                "tar",
+                "-x",
+                "-f",
+                "-",
+                "-C",
+                WORKSPACE,
+            ],
             input_bytes=data,
             timeout=120,
         )
@@ -347,12 +413,18 @@ class SandboxManager:
             raise SandboxError(f"Failed to copy repository into sandbox: {_tail(raw)}")
         logger.info(
             "sandbox_upload session=%s files=%d bytes=%d skipped_links=%d",
-            self.session_id, summary.file_count, summary.total_bytes, summary.skipped_links,
+            self.session_id,
+            summary.file_count,
+            summary.total_bytes,
+            summary.skipped_links,
         )
         return summary
 
     def exec(
-        self, argv: Sequence[str], timeout: int | None = None, stdin: bytes | None = None
+        self,
+        argv: Sequence[str],
+        timeout: int | None = None,
+        stdin: bytes | None = None,
     ) -> ExecResult:
         """Run argv (no shell) inside the sandbox with a hard time limit.
 
@@ -361,11 +433,23 @@ class SandboxManager:
         self._require_running()
         checked = validate_argv(argv)
         limit = self._resolve_timeout(timeout)
-        if stdin is not None and (not isinstance(stdin, bytes) or len(stdin) > MAX_STDIN_BYTES):
+        if stdin is not None and (
+            not isinstance(stdin, bytes) or len(stdin) > MAX_STDIN_BYTES
+        ):
             raise ValueError(f"stdin must be bytes of at most {MAX_STDIN_BYTES} bytes")
         cmd = [
-            "exec", *(["-i"] if stdin is not None else []), "-w", WORKSPACE, self.container_name,
-            "timeout", "-s", "TERM", "-k", str(KILL_GRACE_SECONDS), str(limit), *checked,
+            "exec",
+            *(["-i"] if stdin is not None else []),
+            "-w",
+            WORKSPACE,
+            self.container_name,
+            "timeout",
+            "-s",
+            "TERM",
+            "-k",
+            str(KILL_GRACE_SECONDS),
+            str(limit),
+            *checked,
         ]
         raw = self._docker(cmd, input_bytes=stdin, timeout=limit + BACKSTOP_SECONDS)
         output = _text(raw)
@@ -373,16 +457,29 @@ class SandboxManager:
             # Backstop: the in-container timeout did not fire. Kill the whole sandbox.
             self._docker(["kill", self.container_name], timeout=15)
             self._state = "dead"
-            result = ExecResult(checked, None, output, True, raw.truncated, raw.duration)
+            result = ExecResult(
+                checked, None, output, True, raw.truncated, raw.duration
+            )
         else:
-            if raw.returncode in _DOCKER_DAEMON_ERROR_RCS and output.lstrip().startswith("Error response from daemon"):
+            if (
+                raw.returncode in _DOCKER_DAEMON_ERROR_RCS
+                and output.lstrip().startswith("Error response from daemon")
+            ):
                 self._state = "dead"
-                raise SandboxNotRunningError(f"Sandbox container is not usable: {output.strip()[-300:]}")
+                raise SandboxNotRunningError(
+                    f"Sandbox container is not usable: {output.strip()[-300:]}"
+                )
             timed_out = is_timeout_exit(raw.returncode, raw.duration, limit)
-            result = ExecResult(checked, raw.returncode, output, timed_out, raw.truncated, raw.duration)
+            result = ExecResult(
+                checked, raw.returncode, output, timed_out, raw.truncated, raw.duration
+            )
         logger.info(
             "sandbox_exec session=%s argv0=%s exit=%s timed_out=%s truncated=%s duration=%.2fs",
-            self.session_id, checked[0], result.exit_code, result.timed_out, result.truncated,
+            self.session_id,
+            checked[0],
+            result.exit_code,
+            result.timed_out,
+            result.truncated,
             result.duration_seconds,
         )
         return result
@@ -399,13 +496,19 @@ class SandboxManager:
         try:
             raw = self._docker(["rm", "-f", "-v", self.container_name], timeout=60)
         except SandboxError as exc:
-            logger.error("sandbox_destroy_failed session=%s error=%s", self.session_id, exc)
+            logger.error(
+                "sandbox_destroy_failed session=%s error=%s", self.session_id, exc
+            )
             return
         if raw.returncode == 0 or "No such container" in _text(raw):
             self._state = "destroyed"
             logger.info("sandbox_destroyed session=%s", self.session_id)
         else:
-            logger.error("sandbox_destroy_failed session=%s output=%s", self.session_id, _tail(raw))
+            logger.error(
+                "sandbox_destroy_failed session=%s output=%s",
+                self.session_id,
+                _tail(raw),
+            )
 
     def __enter__(self) -> "SandboxManager":
         self.start()
@@ -415,7 +518,9 @@ class SandboxManager:
         self.destroy()
 
     # ---- internals ----
-    def _docker(self, args: Sequence[str], *, input_bytes: bytes | None = None, timeout: float) -> _RawResult:
+    def _docker(
+        self, args: Sequence[str], *, input_bytes: bytes | None = None, timeout: float
+    ) -> _RawResult:
         return _docker_call(self.config, args, input_bytes=input_bytes, timeout=timeout)
 
     def _require_running(self) -> None:
@@ -424,6 +529,12 @@ class SandboxManager:
 
     def _resolve_timeout(self, timeout: int | None) -> int:
         value = self.config.default_timeout_seconds if timeout is None else timeout
-        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= self.config.max_timeout_seconds:
-            raise ValueError(f"timeout must be an integer between 1 and {self.config.max_timeout_seconds} seconds")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 1 <= value <= self.config.max_timeout_seconds
+        ):
+            raise ValueError(
+                f"timeout must be an integer between 1 and {self.config.max_timeout_seconds} seconds"
+            )
         return value

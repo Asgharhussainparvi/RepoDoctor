@@ -50,3 +50,21 @@ Real model (Phase 5), HTTP API and SSE (Phase 6), UI (Phase 7). A repository who
 collection time (exit code 2) is reported as "could not run the tests" rather than debugged.
 A session left waiting for approval keeps its container until it is approved, rejected or cancelled
 (`python -m repodoctor.sandbox cleanup` removes strays).
+
+## HTTP layer (Phase 6)
+
+```
+Browser/UI  --HTTP/SSE-->  FastAPI (repodoctor/api)  -->  Orchestrator  -->  Toolbox -> SandboxManager -> Docker
+                              |                              |
+                              |-- BackgroundRunner           `-- SessionStore (SQLite; also repositories)
+                              `-- janitor: expires abandoned approvals
+```
+
+- The API is thin. It validates input, schedules work on a small thread pool and reads state from the store.
+  `start` and `approve` return 202 immediately; the UI follows progress over SSE (`/events`).
+- Approval is split: `record_approval` (synchronous, persisted, may refuse with 409) then `continue_session`
+  (background). So a bad hash is rejected before anything runs.
+- Restart behaviour: `WAITING_APPROVAL` sessions survive and rebuild a sandbox from the stored patch on approval;
+  sessions that were mid-run are marked `FAILED` (`server_restarted`).
+- Repositories enter only as an uploaded zip or the bundled sample; clients never send a host path or a command.
+- See `docs/api.md` for the endpoint reference.

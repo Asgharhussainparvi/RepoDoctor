@@ -1,4 +1,5 @@
 """CLI: python -m repodoctor.sandbox [check|build|cleanup]"""
+
 from __future__ import annotations
 
 import argparse
@@ -18,10 +19,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "check":
             print("Docker: OK (Linux containers)")
             present = SandboxManager.image_exists(config)
-            print(f"Image {config.image}: {'present' if present else 'MISSING (run: python -m repodoctor.sandbox build)'}")
+            print(
+                f"Image {config.image}: {'present' if present else 'MISSING (run: python -m repodoctor.sandbox build)'}"
+            )
             return 0 if present else 1
         if args.command == "build":
-            print(f"Building {config.image} (first build downloads the base image; can take a few minutes)...")
+            print(
+                f"Building {config.image} (first build downloads the base image; can take a few minutes)..."
+            )
             output = SandboxManager.build_image(config)
             print("\n".join(output.strip().splitlines()[-5:]))
             print("Build complete.")

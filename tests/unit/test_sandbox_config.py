@@ -10,9 +10,17 @@ def test_defaults_are_valid():
 
 def test_from_env_overrides_and_ignores_blank():
     cfg = SandboxConfig.from_env(
-        {"REPODOCTOR_SANDBOX_MEMORY": "256m", "REPODOCTOR_TEST_TIMEOUT_SECONDS": "30", "REPODOCTOR_SANDBOX_IMAGE": ""}
+        {
+            "REPODOCTOR_SANDBOX_MEMORY": "256m",
+            "REPODOCTOR_TEST_TIMEOUT_SECONDS": "30",
+            "REPODOCTOR_SANDBOX_IMAGE": "",
+        }
     )
-    assert (cfg.memory, cfg.default_timeout_seconds, cfg.image) == ("256m", 30, "repodoctor-sandbox:0.1")
+    assert (cfg.memory, cfg.default_timeout_seconds, cfg.image) == (
+        "256m",
+        30,
+        "repodoctor-sandbox:0.1",
+    )
 
 
 def test_from_env_names_the_bad_variable():

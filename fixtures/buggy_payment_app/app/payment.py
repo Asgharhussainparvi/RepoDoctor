@@ -1,4 +1,5 @@
 """Payment service: validates input, then talks to the gateway."""
+
 from __future__ import annotations
 
 from app.gateway import FakeGateway, GatewayReceipt

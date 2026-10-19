@@ -4,6 +4,7 @@ These run pytest directly on the host against our own *trusted* fixture to pin
 down its behaviour. Untrusted repositories must NEVER be run this way; that
 path will go through SandboxManager (Phase 2).
 """
+
 from __future__ import annotations
 
 import os
@@ -34,7 +35,15 @@ def _run_pytest(repo: Path) -> dict:
     junit = repo.parent / "junit.xml"
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={junit}"],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            f"--junitxml={junit}",
+        ],
         cwd=repo,
         env=env,
         capture_output=True,
@@ -50,7 +59,12 @@ def _run_pytest(repo: Path) -> dict:
         for c in cases
         if c.find("failure") is not None or c.find("error") is not None
     ]
-    return {"total": len(cases), "failed": len(failing), "passed": len(cases) - len(failing), "failing": failing}
+    return {
+        "total": len(cases),
+        "failed": len(failing),
+        "passed": len(cases) - len(failing),
+        "failing": failing,
+    }
 
 
 def test_fixture_fails_exactly_as_expected(tmp_path):
@@ -71,7 +85,11 @@ def test_expected_patch_fixes_fixture(tmp_path):
     repo = _copy_fixture(tmp_path)
     for args in (["--check"], []):
         proc = subprocess.run(
-            ["git", "apply", *args, str(PATCH)], cwd=repo, capture_output=True, text=True, timeout=30
+            ["git", "apply", *args, str(PATCH)],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         assert proc.returncode == 0, proc.stderr
     result = _run_pytest(repo)

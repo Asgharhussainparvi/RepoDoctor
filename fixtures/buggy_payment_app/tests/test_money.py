@@ -5,7 +5,14 @@ from app.money import MAX_AMOUNT_CENTS, format_cents, to_cents, validate_amount_
 
 @pytest.mark.parametrize(
     ("text", "cents"),
-    [("0.01", 1), ("1", 100), ("12.50", 1250), ("100.00", 10000), ("0.10", 10), ("999999.99", 99999999)],
+    [
+        ("0.01", 1),
+        ("1", 100),
+        ("12.50", 1250),
+        ("100.00", 10000),
+        ("0.10", 10),
+        ("999999.99", 99999999),
+    ],
 )
 def test_to_cents(text, cents):
     assert to_cents(text) == cents

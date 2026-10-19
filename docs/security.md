@@ -63,3 +63,28 @@ Approvals are single-use and bound to the patch contents: approving patch A neve
   before approval is the control for this.
 - RepoDoctor runs pytest with `-o addopts=` so a repository's own `addopts` cannot suppress the summary
   line; repositories that depend on `addopts` for correct test runs may behave differently.
+
+## The model is untrusted too
+
+- Repository files, test output and comments are fed to the model, so they can contain prompt-injection text.
+  The prompts say to treat them as data, but that is a mitigation, not a guarantee.
+- What limits the damage: the model only gets read-only tools; it returns a small edit; RepoDoctor builds the
+  diff itself; the patch policy rejects test edits, new/deleted files, renames and path tricks; and a human must
+  approve the exact diff before anything is applied. The model cannot approve, apply, reset or declare success.
+- The Bedrock API key is read from the environment (`AWS_BEARER_TOKEN_BEDROCK`) or the AWS credential chain. It is
+  never written to the repository, the database or the logs. Use an expiry date on long-term keys.
+- Model calls leave your machine: file contents and test output are sent to Amazon Bedrock. Do not point RepoDoctor
+  at code you are not allowed to send to a cloud model. A `global.` inference profile may route a request to any
+  supported region; use a `us.` profile if you need to stay in the US.
+
+## The HTTP API
+
+- Binds to 127.0.0.1 and has no accounts. Anything that can reach the port can use it, so never expose it.
+- Rejects unknown `Host` headers (DNS rebinding) and cross-site POSTs (an `Origin` that is not in
+  `REPODOCTOR_CORS_ORIGINS`). Command-line clients send no Origin and are unaffected.
+- A client can never send a command or a host path: it uploads a zip or picks the bundled sample.
+- Uploads: size-limited while reading; extraction rejects `..`, absolute and drive paths, never extracts symlinks,
+  skips `.git` and cache directories, caps file count and unpacked size (also while streaming), and maps corrupt
+  archives to a clear 400. A failed upload leaves no files behind.
+- Approval is checked in the backend before any work is scheduled; the UI button is cosmetic.
+- Error responses never include stack traces or internal paths.

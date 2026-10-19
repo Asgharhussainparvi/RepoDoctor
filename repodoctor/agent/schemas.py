@@ -1,4 +1,5 @@
 """Structured data exchanged between the orchestrator, the reasoning engine and the API."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,8 +15,12 @@ from .verifier import VerificationResult
 
 @dataclass(frozen=True)
 class AgentConfig:
-    max_patch_attempts: int = 3  # every patch the engine is asked for counts, valid or not
-    max_active_seconds: int = 900  # working time; time spent waiting for a human is excluded
+    max_patch_attempts: int = (
+        3  # every patch the engine is asked for counts, valid or not
+    )
+    max_active_seconds: int = (
+        900  # working time; time spent waiting for a human is excluded
+    )
     test_timeout_seconds: int | None = None  # None = sandbox default
 
 
@@ -37,6 +42,7 @@ class PatchProposal(BaseModel):
 
 class AttemptFeedback(BaseModel):
     """Why an earlier attempt did not work; passed back to the engine on retry."""
+
     attempt: int
     patch_sha256: str | None = None
     reason_code: str

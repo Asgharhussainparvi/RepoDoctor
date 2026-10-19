@@ -1,4 +1,5 @@
 """The debugging state machine: states, allowed transitions, UI mapping. Pure data."""
+
 from __future__ import annotations
 
 from enum import Enum
@@ -25,7 +26,9 @@ class State(str, Enum):
 
 
 S = State
-TERMINAL_STATES = frozenset({S.SUCCESS, S.FAILED, S.REJECTED, S.CANCELLED, S.NO_FAILURE})
+TERMINAL_STATES = frozenset(
+    {S.SUCCESS, S.FAILED, S.REJECTED, S.CANCELLED, S.NO_FAILURE}
+)
 _ABORT = {S.FAILED, S.CANCELLED}
 
 TRANSITIONS: dict[State, frozenset[State]] = {
@@ -55,11 +58,21 @@ def assert_transition(current: State, new: State) -> None:
 
 # Labels for the UI (Phase 7). `timeout` is derived from the error code.
 _UI = {
-    S.INITIALIZE: "analyzing", S.ANALYZE_REPOSITORY: "analyzing", S.RUN_TESTS: "running tests",
-    S.ANALYZE_FAILURE: "investigating", S.INVESTIGATE: "investigating", S.FORM_HYPOTHESIS: "investigating",
-    S.GENERATE_PATCH: "patch proposed", S.WAITING_APPROVAL: "awaiting approval",
-    S.APPLY_PATCH: "applying patch", S.VERIFY: "verifying", S.RETRY: "investigating",
-    S.SUCCESS: "success", S.FAILED: "failed", S.REJECTED: "cancelled", S.CANCELLED: "cancelled",
+    S.INITIALIZE: "analyzing",
+    S.ANALYZE_REPOSITORY: "analyzing",
+    S.RUN_TESTS: "running tests",
+    S.ANALYZE_FAILURE: "investigating",
+    S.INVESTIGATE: "investigating",
+    S.FORM_HYPOTHESIS: "investigating",
+    S.GENERATE_PATCH: "patch proposed",
+    S.WAITING_APPROVAL: "awaiting approval",
+    S.APPLY_PATCH: "applying patch",
+    S.VERIFY: "verifying",
+    S.RETRY: "investigating",
+    S.SUCCESS: "success",
+    S.FAILED: "failed",
+    S.REJECTED: "cancelled",
+    S.CANCELLED: "cancelled",
     S.NO_FAILURE: "success",
 }
 TIMEOUT_CODES = frozenset({"test_timeout", "session_timeout"})

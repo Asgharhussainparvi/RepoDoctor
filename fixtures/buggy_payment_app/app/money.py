@@ -1,4 +1,5 @@
 """Money helpers. All amounts are integer cents."""
+
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation

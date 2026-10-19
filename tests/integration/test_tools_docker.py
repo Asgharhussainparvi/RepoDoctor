@@ -2,11 +2,12 @@
 
 Run: python -m pytest -m docker tests/integration/test_tools_docker.py -v
 """
+
 from __future__ import annotations
 
 import pytest
 
-from conftest import EXPECTED_PATCH, FAILING_TEST, FIXTURE
+from conftest import BUG_LINE, EXPECTED_PATCH, FAILING_TEST, FIXTURE
 from repodoctor.sandbox import SandboxConfig, SandboxError, SandboxManager
 from repodoctor.tools import Toolbox
 
@@ -25,7 +26,9 @@ def _docker_ready(config):
     except SandboxError as exc:
         pytest.skip(f"Docker not available: {exc}")
     if not SandboxManager.image_exists(config):
-        pytest.fail(f"Sandbox image {config.image!r} is missing. Run: python -m repodoctor.sandbox build")
+        pytest.fail(
+            f"Sandbox image {config.image!r} is missing. Run: python -m repodoctor.sandbox build"
+        )
 
 
 @pytest.fixture
@@ -33,7 +36,9 @@ def toolbox(config):
     with SandboxManager(config) as sandbox:
         tb = Toolbox(sandbox)
         loaded = tb.load_repository({"path": str(FIXTURE)})
-        assert loaded.ok, loaded.error  # fails loudly if git/safe.directory misbehaves in the container
+        assert loaded.ok, (
+            loaded.error
+        )  # fails loudly if git/safe.directory misbehaves in the container
         yield tb
 
 
@@ -43,11 +48,15 @@ def test_repository_loads_with_a_git_baseline(toolbox):
 
 def test_list_read_and_search_inside_the_sandbox(toolbox):
     files = toolbox.list_files()
-    assert "app/payment.py" in files.files and not any(f.startswith(".git") for f in files.files)
-    read = toolbox.read_file({"path": "app/payment.py", "start_line": 20, "end_line": 22})
+    assert "app/payment.py" in files.files and not any(
+        f.startswith(".git") for f in files.files
+    )
+    read = toolbox.read_file(
+        {"path": "app/payment.py", "start_line": BUG_LINE - 2, "end_line": BUG_LINE}
+    )
     assert read.ok and "user_id" in read.content
     found = toolbox.search_code({"pattern": "user_id", "path": "app"})
-    assert [(m.path, m.line) for m in found.matches] == [("app/payment.py", 22)]
+    assert [(m.path, m.line) for m in found.matches] == [("app/payment.py", BUG_LINE)]
 
 
 def test_read_file_blocks_traversal_and_missing_files(toolbox):
@@ -75,10 +84,16 @@ def test_full_debug_cycle_in_the_sandbox(toolbox):
     assert applied.ok, applied.error
 
     shown = toolbox.git_diff()
-    assert shown.files_changed == ["app/payment.py"] and (shown.insertions, shown.deletions) == (1, 1)
+    assert shown.files_changed == ["app/payment.py"] and (
+        shown.insertions,
+        shown.deletions,
+    ) == (1, 1)
 
     after = toolbox.run_tests()
-    assert after.status == "passed" and (after.counts.failed, after.counts.passed) == (0, 32)
+    assert after.status == "passed" and (after.counts.failed, after.counts.passed) == (
+        0,
+        32,
+    )
 
     assert toolbox.reset_changes().clean
     assert not toolbox.git_diff().has_changes
@@ -88,7 +103,11 @@ def test_full_debug_cycle_in_the_sandbox(toolbox):
 def test_test_timeout_is_reported_as_timeout(toolbox):
     # A slow test is added INSIDE the sandbox only; nothing on the host changes.
     toolbox._backend.exec(
-        ["python", "-c", "open('tests/test_slow.py','w').write('import time\\ndef test_slow():\\n    time.sleep(60)\\n')"]
+        [
+            "python",
+            "-c",
+            "open('tests/test_slow.py','w').write('import time\\ndef test_slow():\\n    time.sleep(60)\\n')",
+        ]
     )
     out = toolbox.run_tests({"timeout_seconds": 3})
     assert out.ok and out.status == "timeout" and out.timed_out

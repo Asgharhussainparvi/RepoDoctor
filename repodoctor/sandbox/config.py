@@ -1,4 +1,5 @@
 """Sandbox configuration with validation. Stdlib only."""
+
 from __future__ import annotations
 
 import os
@@ -32,7 +33,9 @@ class SandboxConfig:
             raise ValueError("docker_bin must not be empty")
         for name in ("memory", "workspace_size", "tmp_size"):
             if not _SIZE_RE.match(getattr(self, name)):
-                raise ValueError(f"{name} must look like '512m' or '1g', got {getattr(self, name)!r}")
+                raise ValueError(
+                    f"{name} must look like '512m' or '1g', got {getattr(self, name)!r}"
+                )
         if not 0 < self.cpus <= 8:
             raise ValueError("cpus must be in (0, 8]")
         if self.pids_limit < 16:

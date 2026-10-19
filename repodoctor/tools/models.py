@@ -4,6 +4,7 @@ Inputs forbid unknown fields, so a model that invents parameters gets a clear er
 Every output carries ok/error_code/error. Fields have safe defaults, so a failed call
 still returns a well-formed object (and `status` defaults are never a pass).
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -54,11 +55,18 @@ class ReadFileOutput(ToolOutput):
     content: str = ""
     has_more: bool = False
     long_lines_cut: bool = False
+    ends_with_newline: bool = True
 
     def numbered(self) -> str:
         """Render with line numbers for prompts: '  12 | code'."""
         rows = self.content.split("\n") if self.content else []
-        return "\n".join(f"{self.start_line + k:>5} | {row}" for k, row in enumerate(rows))
+        return "\n".join(
+            f"{self.start_line + k:>5} | {row}" for k, row in enumerate(rows)
+        )
+
+
+class ReadWholeFileInput(ToolInput):
+    path: str
 
 
 # ---- search_code ----

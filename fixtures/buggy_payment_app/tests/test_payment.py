@@ -42,7 +42,11 @@ def test_invalid_charge_never_reaches_gateway(service, gateway):
 
 def test_refund_records_receipt(service, gateway):
     receipt = service.refund("cust_42", 500)
-    assert (receipt.customer_id, receipt.amount_cents, receipt.kind) == ("cust_42", 500, "refund")
+    assert (receipt.customer_id, receipt.amount_cents, receipt.kind) == (
+        "cust_42",
+        500,
+        "refund",
+    )
     assert gateway.receipts == [receipt]
 
 

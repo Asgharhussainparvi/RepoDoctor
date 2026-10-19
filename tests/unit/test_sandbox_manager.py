@@ -1,4 +1,5 @@
 """SandboxManager logic against a fake Docker. No Docker needed."""
+
 import io
 import tarfile
 
@@ -13,7 +14,12 @@ from repodoctor.sandbox.errors import (
     SandboxNotRunningError,
     UploadRejectedError,
 )
-from repodoctor.sandbox.manager import SandboxManager, build_repo_tar, is_timeout_exit, validate_argv
+from repodoctor.sandbox.manager import (
+    SandboxManager,
+    build_repo_tar,
+    is_timeout_exit,
+    validate_argv,
+)
 
 
 def raw(rc=0, data=b"", timed_out=False, duration=0.1, truncated=False):
@@ -21,8 +27,18 @@ def raw(rc=0, data=b"", timed_out=False, duration=0.1, truncated=False):
 
 
 class FakeDocker:
-    def __init__(self, *, os_type="linux", image_present=True, run_rc=0, exec_rc=0,
-                 exec_data=b"", exec_timed_out=False, exec_duration=0.5, exec_raises=None):
+    def __init__(
+        self,
+        *,
+        os_type="linux",
+        image_present=True,
+        run_rc=0,
+        exec_rc=0,
+        exec_data=b"",
+        exec_timed_out=False,
+        exec_duration=0.5,
+        exec_raises=None,
+    ):
         self.__dict__.update(locals())
         self.calls, self.inputs = [], []
 
@@ -40,8 +56,12 @@ class FakeDocker:
         if verb == "run":
             return raw(self.run_rc, b"cid\n" if self.run_rc == 0 else b"boom")
         if verb == "exec":
-            return raw(None if self.exec_timed_out else self.exec_rc, self.exec_data,
-                       self.exec_timed_out, self.exec_duration)
+            return raw(
+                None if self.exec_timed_out else self.exec_rc,
+                self.exec_data,
+                self.exec_timed_out,
+                self.exec_duration,
+            )
         if verb in ("kill", "rm", "container"):
             return raw(0)
         raise AssertionError(f"unexpected docker call: {args}")
@@ -57,6 +77,7 @@ def fake(monkeypatch):
         f = FakeDocker(**kwargs)
         monkeypatch.setattr(m, "_run_process", f)
         return f
+
     return install
 
 
@@ -71,13 +92,22 @@ def started(fake):
 # ---- pure helpers ----
 @pytest.mark.parametrize(
     ("rc", "duration", "expected"),
-    [(124, 0.1, True), (137, 10.0, True), (137, 0.5, False), (1, 99, False), (0, 99, False), (None, 5, False)],
+    [
+        (124, 0.1, True),
+        (137, 10.0, True),
+        (137, 0.5, False),
+        (1, 99, False),
+        (0, 99, False),
+        (None, 5, False),
+    ],
 )
 def test_is_timeout_exit(rc, duration, expected):
     assert is_timeout_exit(rc, duration, 10) is expected
 
 
-@pytest.mark.parametrize("bad", ["ls", b"ls", [], [""], ["ok", 3], ["a\x00b"], ["x"] * 65, ["y" * 5000]])
+@pytest.mark.parametrize(
+    "bad", ["ls", b"ls", [], [""], ["ok", 3], ["a\x00b"], ["x"] * 65, ["y" * 5000]]
+)
 def test_validate_argv_rejects(bad):
     with pytest.raises(ValueError):
         validate_argv(bad)
@@ -110,8 +140,16 @@ def test_run_args_enforce_isolation():
 def test_run_args_never_widen_access():
     args = SandboxManager(session_id="t1").build_run_args()
     joined = " ".join(args).lower()
-    for forbidden in ("--privileged", "--volume", "--mount", "docker.sock", "--network host",
-                      "--cap-add", "--pid host", "--device"):
+    for forbidden in (
+        "--privileged",
+        "--volume",
+        "--mount",
+        "docker.sock",
+        "--network host",
+        "--cap-add",
+        "--pid host",
+        "--device",
+    ):
         assert forbidden not in joined
     assert "-v" not in args
 
@@ -160,8 +198,19 @@ def test_exec_wraps_command_with_in_container_timeout(started):
     sb, f = started
     result = sb.exec(["python", "-c", "print(1)"], timeout=10)
     assert f.calls[-1] == [
-        "exec", "-w", "/workspace", "repodoctor-t1",
-        "timeout", "-s", "TERM", "-k", "2", "10", "python", "-c", "print(1)",
+        "exec",
+        "-w",
+        "/workspace",
+        "repodoctor-t1",
+        "timeout",
+        "-s",
+        "TERM",
+        "-k",
+        "2",
+        "10",
+        "python",
+        "-c",
+        "print(1)",
     ]
     assert result.ok and result.argv == ("python", "-c", "print(1)")
 
@@ -340,3 +389,11 @@ def test_exec_rejects_bad_stdin(started, bad):
 
 def test_workspace_property():
     assert SandboxManager(session_id="t1").workspace == "/workspace"
+
+
+def test_docker_unavailable_message_is_clean_and_detail_is_separate(fake):
+    fake(exec_raises=FileNotFoundError("[Errno 2] No such file or directory: 'docker'"))
+    with pytest.raises(DockerUnavailableError) as err:
+        SandboxManager(session_id="t1").start()
+    assert str(err.value) == "Sandbox unavailable. Docker must be running."
+    assert "docker" in err.value.detail and "Errno" in err.value.detail

@@ -1,4 +1,5 @@
 """Sandbox error types. Messages are safe to show in the UI."""
+
 from __future__ import annotations
 
 DOCKER_UNAVAILABLE_MESSAGE = "Sandbox unavailable. Docker must be running."
@@ -9,7 +10,16 @@ class SandboxError(Exception):
 
 
 class DockerUnavailableError(SandboxError):
-    """Docker is missing, stopped, or not reachable."""
+    """Docker is missing, stopped, or not reachable.
+
+    The message is user-facing and always clean; technical detail goes to `.detail` and the logs.
+    """
+
+    def __init__(
+        self, message: str = DOCKER_UNAVAILABLE_MESSAGE, detail: str = ""
+    ) -> None:
+        super().__init__(message)
+        self.detail = detail
 
 
 class SandboxImageMissingError(SandboxError):

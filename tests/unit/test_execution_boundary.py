@@ -1,18 +1,32 @@
 """Architecture rule: only repodoctor/sandbox/manager.py may execute processes."""
+
 import ast
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[2] / "repodoctor"
 ALLOWED = PACKAGE / "sandbox" / "manager.py"
 FORBIDDEN_MODULES = {"subprocess", "pty", "docker", "multiprocessing", "pexpect"}
-FORBIDDEN_OS_ATTRS = {"system", "popen", "execv", "execve", "execvp", "execl", "execlp", "spawnv", "spawnl", "startfile"}
+FORBIDDEN_OS_ATTRS = {
+    "system",
+    "popen",
+    "execv",
+    "execve",
+    "execvp",
+    "execl",
+    "execlp",
+    "spawnv",
+    "spawnl",
+    "startfile",
+}
 
 
 def violations(path: Path) -> list[str]:
     found = []
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
-            found += [a.name for a in node.names if a.name.split(".")[0] in FORBIDDEN_MODULES]
+            found += [
+                a.name for a in node.names if a.name.split(".")[0] in FORBIDDEN_MODULES
+            ]
         elif isinstance(node, ast.ImportFrom) and node.module:
             if node.module.split(".")[0] in FORBIDDEN_MODULES:
                 found.append(node.module)

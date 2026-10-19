@@ -1,0 +1,11 @@
+--- a/app/payment.py
++++ b/app/payment.py
+@@ -19,7 +19,7 @@
+         """Charge a customer."""
+         _validate_customer_id(customer_id)
+         validate_amount_cents(amount_cents)
+-        return self._gateway.charge(user_id, amount_cents)
++        return self._gateway.charge(other_id, amount_cents)
+ 
+     def refund(self, customer_id: str, amount_cents: int) -> GatewayReceipt:
+         """Refund a customer."""

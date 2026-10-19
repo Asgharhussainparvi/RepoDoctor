@@ -3,6 +3,7 @@
 Build the image first:  python -m repodoctor.sandbox build
 Run only these:         python -m pytest -m docker -v
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -31,7 +32,9 @@ def _docker_ready(config):
     except SandboxError as exc:
         pytest.skip(f"Docker not available: {exc}")
     if not SandboxManager.image_exists(config):
-        pytest.fail(f"Sandbox image {config.image!r} is missing. Run: python -m repodoctor.sandbox build")
+        pytest.fail(
+            f"Sandbox image {config.image!r} is missing. Run: python -m repodoctor.sandbox build"
+        )
 
 
 @pytest.fixture
@@ -66,14 +69,20 @@ def test_runs_as_non_root(sandbox):
 
 def test_no_network(sandbox):
     result = sandbox.exec(
-        ["python", "-c", "import socket; socket.create_connection(('1.1.1.1', 53), timeout=3)"]
+        [
+            "python",
+            "-c",
+            "import socket; socket.create_connection(('1.1.1.1', 53), timeout=3)",
+        ]
     )
     assert result.exit_code != 0 and "Traceback" in result.output
 
 
 def test_filesystem_is_read_only_except_workspace_and_tmp(sandbox):
     assert sandbox.exec(["python", "-c", "open('/rootfile', 'w')"]).exit_code != 0
-    assert sandbox.exec(["python", "-c", "open('/workspace/ok.txt', 'w').write('1')"]).ok
+    assert sandbox.exec(
+        ["python", "-c", "open('/workspace/ok.txt', 'w').write('1')"]
+    ).ok
     assert sandbox.exec(["python", "-c", "open('/tmp/ok.txt', 'w').write('1')"]).ok
 
 
@@ -103,7 +112,9 @@ def test_output_is_capped_but_keeps_the_tail(config):
 
 
 def test_memory_limit_stops_allocation_bomb(sandbox):
-    result = sandbox.exec(["python", "-c", "b = b'x' * (900 * 1024 * 1024); print('ALLOCATED')"])
+    result = sandbox.exec(
+        ["python", "-c", "b = b'x' * (900 * 1024 * 1024); print('ALLOCATED')"]
+    )
     assert result.exit_code != 0 and "ALLOCATED" not in result.output
 
 
@@ -137,5 +148,7 @@ def test_stdin_is_delivered_to_the_process(sandbox):
 
 
 def test_python_can_run_a_script_from_stdin(sandbox):
-    result = sandbox.exec(["python", "-", "arg1"], stdin=b"import sys; print(sys.argv[1])")
+    result = sandbox.exec(
+        ["python", "-", "arg1"], stdin=b"import sys; print(sys.argv[1])"
+    )
     assert result.ok and result.output.strip() == "arg1"

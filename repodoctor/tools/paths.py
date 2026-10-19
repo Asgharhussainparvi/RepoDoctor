@@ -1,4 +1,5 @@
 """Repository path validation and the protected-path policy. Pure functions."""
+
 from __future__ import annotations
 
 import fnmatch
@@ -10,7 +11,15 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 PROTECTED_DIR_NAMES = frozenset({"tests", "test", "__tests__"})
 PROTECTED_FILE_NAMES = frozenset(
-    {"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", "noxfile.py", ".coveragerc"}
+    {
+        "conftest.py",
+        "pytest.ini",
+        "tox.ini",
+        "setup.cfg",
+        "pyproject.toml",
+        "noxfile.py",
+        ".coveragerc",
+    }
 )
 PROTECTED_FILE_GLOBS = ("test_*.py", "*_test.py")
 

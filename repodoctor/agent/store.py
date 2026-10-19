@@ -4,6 +4,7 @@ Session state, proposed patches and approvals live here, so a WAITING_APPROVAL
 session survives a server restart. State changes use compare-and-set so two
 callers can never both move a session from the same state.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,11 +17,15 @@ from pathlib import Path
 from typing import Sequence
 
 from .schemas import AgentEvent, AttemptFeedback
-from .states import State
+from .states import TERMINAL_STATES, State
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS repositories (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL,
+    file_count INTEGER NOT NULL, total_bytes INTEGER NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS debug_sessions (
-    id TEXT PRIMARY KEY, repo_path TEXT NOT NULL, state TEXT NOT NULL,
+    id TEXT PRIMARY KEY, repo_path TEXT NOT NULL, repository_id TEXT, state TEXT NOT NULL,
     patch_attempts INTEGER NOT NULL DEFAULT 0, active_seconds REAL NOT NULL DEFAULT 0,
     reproduction_json TEXT, hypothesis_json TEXT, feedback_json TEXT NOT NULL DEFAULT '[]',
     message TEXT NOT NULL DEFAULT '', error_code TEXT, report_json TEXT,
@@ -53,9 +58,21 @@ class StaleStateError(Exception):
 
 
 @dataclass(frozen=True)
+class RepositoryRow:
+    id: str
+    name: str
+    kind: str  # "upload" | "sample"
+    path: str
+    file_count: int
+    total_bytes: int
+    created_at: str
+
+
+@dataclass(frozen=True)
 class SessionRow:
     id: str
     repo_path: str
+    repository_id: str | None
     state: State
     patch_attempts: int
     active_seconds: float
@@ -89,6 +106,14 @@ class SessionStore:
         self._lock = threading.RLock()
         with self._lock, self._conn:
             self._conn.executescript(SCHEMA)
+            columns = {
+                r["name"]
+                for r in self._conn.execute("PRAGMA table_info(debug_sessions)")
+            }
+            if "repository_id" not in columns:  # database created by an older version
+                self._conn.execute(
+                    "ALTER TABLE debug_sessions ADD COLUMN repository_id TEXT"
+                )
 
     def close(self) -> None:
         with self._lock:
@@ -116,20 +141,113 @@ class SessionStore:
         )
         return sid
 
+    # ---- repositories ----
+    def create_repository(
+        self,
+        *,
+        rid: str,
+        name: str,
+        kind: str,
+        path: str,
+        file_count: int,
+        total_bytes: int,
+    ) -> RepositoryRow:
+        self._run(
+            "INSERT INTO repositories (id, name, kind, path, file_count, total_bytes, created_at) VALUES (?,?,?,?,?,?,?)",
+            (rid, name, kind, path, file_count, total_bytes, _now()),
+        )
+        return self.get_repository(rid)
+
+    def get_repository(self, rid: str) -> RepositoryRow:
+        row = self._one("SELECT * FROM repositories WHERE id=?", (rid,))
+        if row is None:
+            raise KeyError(rid)
+        return RepositoryRow(
+            row["id"],
+            row["name"],
+            row["kind"],
+            row["path"],
+            row["file_count"],
+            row["total_bytes"],
+            row["created_at"],
+        )
+
+    def set_repository(self, sid: str, repository_id: str) -> None:
+        self._run(
+            "UPDATE debug_sessions SET repository_id=? WHERE id=?", (repository_id, sid)
+        )
+
+    # ---- listing helpers (API, recovery, cleanup) ----
+    def count_active(self) -> int:
+        marks = ",".join("?" for _ in TERMINAL_STATES)
+        return self._one(
+            f"SELECT COUNT(*) FROM debug_sessions WHERE state NOT IN ({marks})",
+            [s.value for s in TERMINAL_STATES],
+        )[0]
+
+    def sessions_in_states(self, states: Sequence[State]) -> list[str]:
+        marks = ",".join("?" for _ in states)
+        return [
+            r["id"]
+            for r in self._all(
+                f"SELECT id FROM debug_sessions WHERE state IN ({marks}) ORDER BY created_at",
+                [s.value for s in states],
+            )
+        ]
+
+    def waiting_older_than(self, cutoff_iso: str) -> list[str]:
+        return [
+            r["id"]
+            for r in self._all(
+                "SELECT id FROM debug_sessions WHERE state=? AND updated_at <= ?",
+                (State.WAITING_APPROVAL.value, cutoff_iso),
+            )
+        ]
+
+    def steps_after(self, sid: str, seq: int) -> list[AgentEvent]:
+        return [
+            AgentEvent(
+                seq=r["id"],
+                session_id=sid,
+                state=State(r["state"]),
+                kind=r["kind"],
+                message=r["message"],
+                created_at=r["created_at"],
+            )
+            for r in self._all(
+                "SELECT * FROM agent_steps WHERE session_id=? AND id > ? ORDER BY id",
+                (sid, seq),
+            )
+        ]
+
     def get_session(self, sid: str) -> SessionRow:
         row = self._one("SELECT * FROM debug_sessions WHERE id=?", (sid,))
         if row is None:
             raise KeyError(sid)
         return SessionRow(
-            id=row["id"], repo_path=row["repo_path"], state=State(row["state"]),
-            patch_attempts=row["patch_attempts"], active_seconds=row["active_seconds"],
-            reproduction_json=row["reproduction_json"], hypothesis_json=row["hypothesis_json"],
+            id=row["id"],
+            repo_path=row["repo_path"],
+            repository_id=row["repository_id"],
+            state=State(row["state"]),
+            patch_attempts=row["patch_attempts"],
+            active_seconds=row["active_seconds"],
+            reproduction_json=row["reproduction_json"],
+            hypothesis_json=row["hypothesis_json"],
             feedback=[AttemptFeedback(**f) for f in json.loads(row["feedback_json"])],
-            message=row["message"], error_code=row["error_code"], report_json=row["report_json"],
+            message=row["message"],
+            error_code=row["error_code"],
+            report_json=row["report_json"],
         )
 
-    def set_state(self, sid: str, *, expected: State, new: State, message: str = "",
-                  error_code: str | None = None) -> None:
+    def set_state(
+        self,
+        sid: str,
+        *,
+        expected: State,
+        new: State,
+        message: str = "",
+        error_code: str | None = None,
+    ) -> None:
         cur = self._run(
             "UPDATE debug_sessions SET state=?, message=?, error_code=?, updated_at=? WHERE id=? AND state=?",
             (new.value, message, error_code, _now(), sid, expected.value),
@@ -139,7 +257,10 @@ class SessionStore:
 
     def _set_field(self, sid: str, column: str, value: object) -> None:
         assert column in {"reproduction_json", "hypothesis_json", "report_json"}
-        self._run(f"UPDATE debug_sessions SET {column}=?, updated_at=? WHERE id=?", (value, _now(), sid))
+        self._run(
+            f"UPDATE debug_sessions SET {column}=?, updated_at=? WHERE id=?",
+            (value, _now(), sid),
+        )
 
     def save_reproduction(self, sid: str, payload: str) -> None:
         self._set_field(sid, "reproduction_json", payload)
@@ -152,18 +273,31 @@ class SessionStore:
 
     def increment_attempts(self, sid: str) -> int:
         with self._lock, self._conn:
-            self._conn.execute("UPDATE debug_sessions SET patch_attempts = patch_attempts + 1 WHERE id=?", (sid,))
-            return self._conn.execute("SELECT patch_attempts FROM debug_sessions WHERE id=?", (sid,)).fetchone()[0]
+            self._conn.execute(
+                "UPDATE debug_sessions SET patch_attempts = patch_attempts + 1 WHERE id=?",
+                (sid,),
+            )
+            return self._conn.execute(
+                "SELECT patch_attempts FROM debug_sessions WHERE id=?", (sid,)
+            ).fetchone()[0]
 
     def add_active_seconds(self, sid: str, seconds: float) -> None:
-        self._run("UPDATE debug_sessions SET active_seconds = active_seconds + ? WHERE id=?", (max(0.0, seconds), sid))
+        self._run(
+            "UPDATE debug_sessions SET active_seconds = active_seconds + ? WHERE id=?",
+            (max(0.0, seconds), sid),
+        )
 
     def append_feedback(self, sid: str, feedback: AttemptFeedback) -> None:
         with self._lock, self._conn:
-            raw = self._conn.execute("SELECT feedback_json FROM debug_sessions WHERE id=?", (sid,)).fetchone()[0]
+            raw = self._conn.execute(
+                "SELECT feedback_json FROM debug_sessions WHERE id=?", (sid,)
+            ).fetchone()[0]
             items = json.loads(raw)
             items.append(feedback.model_dump())
-            self._conn.execute("UPDATE debug_sessions SET feedback_json=? WHERE id=?", (json.dumps(items), sid))
+            self._conn.execute(
+                "UPDATE debug_sessions SET feedback_json=? WHERE id=?",
+                (json.dumps(items), sid),
+            )
 
     # ---- events and tool calls ----
     def add_step(self, sid: str, state: State, kind: str, message: str) -> AgentEvent:
@@ -172,13 +306,28 @@ class SessionStore:
             "INSERT INTO agent_steps (session_id, state, kind, message, created_at) VALUES (?,?,?,?,?)",
             (sid, state.value, kind, message, now),
         )
-        return AgentEvent(seq=cur.lastrowid, session_id=sid, state=state, kind=kind, message=message, created_at=now)
+        return AgentEvent(
+            seq=cur.lastrowid,
+            session_id=sid,
+            state=state,
+            kind=kind,
+            message=message,
+            created_at=now,
+        )
 
     def steps(self, sid: str) -> list[AgentEvent]:
         return [
-            AgentEvent(seq=r["id"], session_id=sid, state=State(r["state"]), kind=r["kind"],
-                       message=r["message"], created_at=r["created_at"])
-            for r in self._all("SELECT * FROM agent_steps WHERE session_id=? ORDER BY id", (sid,))
+            AgentEvent(
+                seq=r["id"],
+                session_id=sid,
+                state=State(r["state"]),
+                kind=r["kind"],
+                message=r["message"],
+                created_at=r["created_at"],
+            )
+            for r in self._all(
+                "SELECT * FROM agent_steps WHERE session_id=? ORDER BY id", (sid,)
+            )
         ]
 
     def add_tool_calls(self, sid: str, records: Sequence) -> None:
@@ -187,30 +336,78 @@ class SessionStore:
             self._conn.executemany(
                 "INSERT INTO tool_calls (session_id, tool, ok, error_code, duration_seconds, budgeted, created_at)"
                 " VALUES (?,?,?,?,?,?,?)",
-                [(sid, r.tool, int(r.ok), r.error_code, r.duration_seconds, int(r.budgeted), now) for r in records],
+                [
+                    (
+                        sid,
+                        r.tool,
+                        int(r.ok),
+                        r.error_code,
+                        r.duration_seconds,
+                        int(r.budgeted),
+                        now,
+                    )
+                    for r in records
+                ],
             )
 
     def tool_calls(self, sid: str) -> list[dict]:
-        return [dict(r) for r in self._all("SELECT * FROM tool_calls WHERE session_id=? ORDER BY id", (sid,))]
+        return [
+            dict(r)
+            for r in self._all(
+                "SELECT * FROM tool_calls WHERE session_id=? ORDER BY id", (sid,)
+            )
+        ]
 
     # ---- patches and approval ----
     @staticmethod
     def _patch(row: sqlite3.Row) -> PatchRow:
-        return PatchRow(row["session_id"], row["attempt"], row["sha256"], row["diff"], row["summary"],
-                        json.loads(row["files_json"]), row["status"])
+        return PatchRow(
+            row["session_id"],
+            row["attempt"],
+            row["sha256"],
+            row["diff"],
+            row["summary"],
+            json.loads(row["files_json"]),
+            row["status"],
+        )
 
-    def add_patch(self, sid: str, *, attempt: int, sha256: str, diff: str, summary: str, files: list[str]) -> None:
+    def add_patch(
+        self,
+        sid: str,
+        *,
+        attempt: int,
+        sha256: str,
+        diff: str,
+        summary: str,
+        files: list[str],
+    ) -> None:
         self._run(
             "INSERT INTO patches (session_id, attempt, sha256, diff, summary, files_json, status, created_at)"
             " VALUES (?,?,?,?,?,?,?,?)",
-            (sid, attempt, sha256, diff, summary, json.dumps(files), "proposed", _now()),
+            (
+                sid,
+                attempt,
+                sha256,
+                diff,
+                summary,
+                json.dumps(files),
+                "proposed",
+                _now(),
+            ),
         )
 
     def has_patch(self, sid: str, sha256: str) -> bool:
-        return self._one("SELECT 1 FROM patches WHERE session_id=? AND sha256=?", (sid, sha256)) is not None
+        return (
+            self._one(
+                "SELECT 1 FROM patches WHERE session_id=? AND sha256=?", (sid, sha256)
+            )
+            is not None
+        )
 
     def get_patch(self, sid: str, sha256: str) -> PatchRow | None:
-        row = self._one("SELECT * FROM patches WHERE session_id=? AND sha256=?", (sid, sha256))
+        row = self._one(
+            "SELECT * FROM patches WHERE session_id=? AND sha256=?", (sid, sha256)
+        )
         return self._patch(row) if row else None
 
     def latest_patch(self, sid: str, status: str | None = None) -> PatchRow | None:
@@ -220,7 +417,9 @@ class SessionStore:
         row = self._one(sql + " ORDER BY id DESC LIMIT 1", params)
         return self._patch(row) if row else None
 
-    def set_patch_status(self, sid: str, sha256: str, *, expected: str, new: str) -> None:
+    def set_patch_status(
+        self, sid: str, sha256: str, *, expected: str, new: str
+    ) -> None:
         cur = self._run(
             "UPDATE patches SET status=?, decided_at=? WHERE session_id=? AND sha256=? AND status=?",
             (new, _now(), sid, sha256, expected),
@@ -233,7 +432,13 @@ class SessionStore:
         with self._lock, self._conn:
             moved = self._conn.execute(
                 "UPDATE debug_sessions SET state=?, message=?, updated_at=? WHERE id=? AND state=?",
-                (State.APPLY_PATCH.value, "Patch approved", _now(), sid, State.WAITING_APPROVAL.value),
+                (
+                    State.APPLY_PATCH.value,
+                    "Patch approved",
+                    _now(),
+                    sid,
+                    State.WAITING_APPROVAL.value,
+                ),
             ).rowcount
             if moved != 1:
                 raise StaleStateError("session is not waiting for approval")
@@ -242,14 +447,21 @@ class SessionStore:
                 (_now(), sid, sha256),
             ).rowcount
             if marked != 1:
-                raise KeyError("no pending patch with this hash")  # rolls back the state change too
+                raise KeyError(
+                    "no pending patch with this hash"
+                )  # rolls back the state change too
 
     def reject_patch(self, sid: str, sha256: str) -> None:
         with self._lock, self._conn:
             moved = self._conn.execute(
                 "UPDATE debug_sessions SET state=?, message=?, updated_at=? WHERE id=? AND state=?",
-                (State.REJECTED.value, "Patch rejected. No changes were applied.", _now(), sid,
-                 State.WAITING_APPROVAL.value),
+                (
+                    State.REJECTED.value,
+                    "Patch rejected. No changes were applied.",
+                    _now(),
+                    sid,
+                    State.WAITING_APPROVAL.value,
+                ),
             ).rowcount
             if moved != 1:
                 raise StaleStateError("session is not waiting for approval")
@@ -261,12 +473,17 @@ class SessionStore:
                 raise KeyError("no pending patch with this hash")
 
     # ---- verification ----
-    def save_verification(self, sid: str, attempt: int, verified: bool, payload: str) -> None:
+    def save_verification(
+        self, sid: str, attempt: int, verified: bool, payload: str
+    ) -> None:
         self._run(
             "INSERT INTO verification_results (session_id, attempt, verified, result_json, created_at) VALUES (?,?,?,?,?)",
             (sid, attempt, int(verified), payload, _now()),
         )
 
     def latest_verification_json(self, sid: str) -> str | None:
-        row = self._one("SELECT result_json FROM verification_results WHERE session_id=? ORDER BY id DESC LIMIT 1", (sid,))
+        row = self._one(
+            "SELECT result_json FROM verification_results WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            (sid,),
+        )
         return row["result_json"] if row else None

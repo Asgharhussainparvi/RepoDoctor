@@ -1,4 +1,5 @@
 """Real subprocesses (the current Python interpreter), no Docker needed."""
+
 import sys
 
 import pytest
@@ -8,7 +9,10 @@ from repodoctor.sandbox.manager import TRUNCATION_MARKER, _run_process
 
 def run(code, *, input_bytes=None, timeout=20, max_bytes=10_000):
     return _run_process(
-        [sys.executable, "-c", code], input_bytes=input_bytes, timeout=timeout, max_bytes=max_bytes
+        [sys.executable, "-c", code],
+        input_bytes=input_bytes,
+        timeout=timeout,
+        max_bytes=max_bytes,
     )
 
 
@@ -29,7 +33,9 @@ def test_output_exactly_at_cap_is_not_truncated():
 
 
 def test_large_output_keeps_head_and_tail():
-    raw = run("import sys; sys.stdout.write('HEAD' + 'x' * 2_000_000 + 'END')", max_bytes=1000)
+    raw = run(
+        "import sys; sys.stdout.write('HEAD' + 'x' * 2_000_000 + 'END')", max_bytes=1000
+    )
     assert raw.truncated
     assert raw.data.startswith(b"HEAD") and raw.data.endswith(b"END")
     assert TRUNCATION_MARKER in raw.data
@@ -42,10 +48,17 @@ def test_timeout_kills_process_quickly():
 
 
 def test_stdin_is_delivered():
-    raw = run("import sys; sys.stdout.write(sys.stdin.read().upper())", input_bytes=b"abc")
+    raw = run(
+        "import sys; sys.stdout.write(sys.stdin.read().upper())", input_bytes=b"abc"
+    )
     assert raw.data == b"ABC"
 
 
 def test_missing_binary_raises():
     with pytest.raises(OSError):
-        _run_process(["definitely-not-a-real-binary-xyz"], input_bytes=None, timeout=5, max_bytes=100)
+        _run_process(
+            ["definitely-not-a-real-binary-xyz"],
+            input_bytes=None,
+            timeout=5,
+            max_bytes=100,
+        )

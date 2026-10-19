@@ -1,0 +1,9 @@
+# Tooling configuration only. (pytest is configured in pytest.ini, which takes precedence.)
+#
+# fixtures/ holds intentionally buggy "golden" repositories. Tests locate the bug by content, but keep
+# auto-formatters away so the fixtures stay exactly as designed.
+[tool.black]
+extend-exclude = '/fixtures/'
+
+[tool.ruff]
+extend-exclude = ["fixtures"]

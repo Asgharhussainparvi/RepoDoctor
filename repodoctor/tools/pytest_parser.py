@@ -3,6 +3,7 @@
 We read pytest's final summary line and its short-test-summary block. Both are
 printed last, so they survive the sandbox's head+tail output truncation.
 """
+
 from __future__ import annotations
 
 import re
@@ -11,12 +12,23 @@ from typing import Literal
 
 RunStatus = Literal["passed", "failed", "error", "timeout", "no_tests", "unparseable"]
 
-_PART = r"\d+ (?:failed|passed|skipped|deselected|xfailed|xpassed|warnings?|errors?|rerun)"
+_PART = (
+    r"\d+ (?:failed|passed|skipped|deselected|xfailed|xpassed|warnings?|errors?|rerun)"
+)
 _BODY_RE = re.compile(rf"^{_PART}(?:, {_PART})*$")
-_SUMMARY_RE = re.compile(r"^(?P<body>.+?) in (?P<secs>\d+(?:\.\d+)?)s(?: \(\d+:\d{2}:\d{2}\))?$")
-_COUNT_RE = re.compile(r"(\d+) (failed|passed|skipped|deselected|xfailed|xpassed|warnings?|errors?|rerun)")
+_SUMMARY_RE = re.compile(
+    r"^(?P<body>.+?) in (?P<secs>\d+(?:\.\d+)?)s(?: \(\d+:\d{2}:\d{2}\))?$"
+)
+_COUNT_RE = re.compile(
+    r"(\d+) (failed|passed|skipped|deselected|xfailed|xpassed|warnings?|errors?|rerun)"
+)
 _FAILED_RE = re.compile(r"^(?P<kind>FAILED|ERROR) (?P<id>\S.*?)(?: - (?P<msg>.*))?$")
-_KEY = {"warning": "warnings", "warnings": "warnings", "error": "errors", "errors": "errors"}
+_KEY = {
+    "warning": "warnings",
+    "warnings": "warnings",
+    "error": "errors",
+    "errors": "errors",
+}
 
 
 @dataclass
@@ -68,7 +80,11 @@ def parse_pytest_output(output: str) -> ParsedRun | None:
         break
     if summary_idx is None:
         return None
-    return ParsedRun(counts=counts, duration_seconds=duration, failures=_parse_failures(lines, summary_idx))
+    return ParsedRun(
+        counts=counts,
+        duration_seconds=duration,
+        failures=_parse_failures(lines, summary_idx),
+    )
 
 
 def _parse_failures(lines: list[str], summary_idx: int) -> list[ParsedFailure]:
@@ -87,12 +103,16 @@ def _parse_failures(lines: list[str], summary_idx: int) -> list[ParsedFailure]:
             continue
         seen.add(match.group("id"))
         failures.append(
-            ParsedFailure(match.group("id"), match.group("kind"), (match.group("msg") or "")[:300])
+            ParsedFailure(
+                match.group("id"), match.group("kind"), (match.group("msg") or "")[:300]
+            )
         )
     return failures
 
 
-def classify_run(exit_code: int | None, parsed: ParsedRun | None, timed_out: bool) -> RunStatus:
+def classify_run(
+    exit_code: int | None, parsed: ParsedRun | None, timed_out: bool
+) -> RunStatus:
     """Decide the run status. A pass requires exit code AND counts to agree.
 
     Anything inconsistent is "unparseable", which is never treated as a pass.
