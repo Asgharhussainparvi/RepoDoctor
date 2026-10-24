@@ -88,29 +88,90 @@ def extract_zip(source: BinaryIO, dest: Path, limits: RepoLimits | None = None) 
         if sum(i.file_size for i, _ in kept) > limits.max_unpacked_bytes:
             raise RepoError("too_large", f"The archive unpacks to more than {limits.max_unpacked_bytes} bytes.", 413)
 
+
         tops = {c.split("/", 1)[0] for _, c in kept}
-        strip = len(tops) == 1 and all("/" in c for _, c in kept)  # GitHub-style "repo-main/..." wrapper
+        strip = len(tops) == 1 and all("/" in c for _, c in kept)
+
+        # Resolve every final path before writing anything. Windows paths are
+        # case-insensitive, so casefold() also catches collisions on Windows.
+
+        planned: list[tuple[zipfile.ZipInfo, str]] = []
+        seen_files: set[str] = set()
+        seen_prefixes: set[str] = set()
+
+        # Validate all destination paths before extracting any files.
+        for info, clean in kept:
+            rel = clean.split("/", 1)[1] if strip else clean
+            key = rel.casefold()
+            parts = key.split("/")
+
+            # Reject duplicate paths and file/directory conflicts.
+            if key in seen_files or key in seen_prefixes:
+                raise RepoError(
+                    "unsafe_archive",
+                    "The archive contains duplicate or conflicting file paths.",
+                )
+
+            parents = ["/".join(parts[:i]) for i in range(1, len(parts))]
+            if any(parent in seen_files for parent in parents):
+                raise RepoError(
+                    "unsafe_archive",
+                    "The archive contains conflicting file and directory paths.",
+                )
+
+            seen_files.add(key)
+            seen_prefixes.update(parents)
+            planned.append((info, rel))
+
         root = dest.resolve()
         root.mkdir(parents=True, exist_ok=True)
         total = 0
+
+        # Extract only after all paths have passed validation.
         try:
-            for info, clean in kept:
-                rel = clean.split("/", 1)[1] if strip else clean
+            for info, rel in planned:
                 target = (root / rel).resolve()
+
                 if root != target and root not in target.parents:
-                    raise RepoError("unsafe_archive", "The archive tries to write outside the repository.")
+                    raise RepoError(
+                        "unsafe_archive",
+                        "The archive tries to write outside the repository.",
+                    )
+
                 target.parent.mkdir(parents=True, exist_ok=True)
+
                 with archive.open(info) as src, open(target, "wb") as out:
-                    while chunk := src.read(65536):  # the declared size can lie: enforce while streaming
+                    while chunk := src.read(65536):
                         total += len(chunk)
+
                         if total > limits.max_unpacked_bytes:
-                            raise RepoError("too_large",
-                                            f"The archive unpacks to more than {limits.max_unpacked_bytes} bytes.", 413)
+                            raise RepoError(
+                                "too_large",
+                                f"The archive unpacks to more than "
+                                f"{limits.max_unpacked_bytes} bytes.",
+                                413,
+                            )
+
                         out.write(chunk)
-        except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError) as exc:
-            raise RepoError("invalid_zip", "The archive is corrupt or uses an unsupported format.") from exc
-        except OSError as exc:  # e.g. a name or path the file system refuses
-            raise RepoError("unsafe_archive", "A file in the archive could not be extracted on this system.") from exc
+
+        except (
+            zipfile.BadZipFile,
+            zlib.error,
+            EOFError,
+            NotImplementedError,
+            RuntimeError,
+        ) as exc:
+            raise RepoError(
+                "invalid_zip",
+                "The archive is corrupt or uses an unsupported format.",
+            ) from exc
+
+        except OSError as exc:
+            raise RepoError(
+                "unsafe_archive",
+                "A file in the archive could not be extracted on this system.",
+            ) from exc
+
     return ExtractStats(file_count=len(kept), total_bytes=total)
 
 

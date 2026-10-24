@@ -39,3 +39,18 @@ def test_from_env_overrides_and_lists():
 def test_bad_values_are_rejected(env):
     with pytest.raises(ValueError):
         ApiSettings.from_env(env)
+
+
+def test_server_bind_guard_accepts_loopback_hosts():
+    from repodoctor.api.__main__ import _assert_loopback_bind
+
+    for host in ("127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.2"):
+        _assert_loopback_bind(host)
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "example.com", ""])
+def test_server_bind_guard_rejects_non_loopback_hosts(host):
+    from repodoctor.api.__main__ import _assert_loopback_bind
+
+    with pytest.raises(ValueError, match="no API authentication"):
+        _assert_loopback_bind(host)
